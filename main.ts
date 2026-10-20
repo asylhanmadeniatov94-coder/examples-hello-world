@@ -1,6 +1,5 @@
 const kv = await Deno.openKv();
 
-// Поддерживаем оба варианта написания токена (с '0' и с 'o')
 function checkToken(token: string | null): boolean {
   return token === "2701_8dc46d:0afefe" || token === "2701_8dc46d:oafefe";
 }
@@ -8,6 +7,7 @@ function checkToken(token: string | null): boolean {
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
+  // CORS
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
@@ -18,7 +18,7 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Step 1: Проверка /dump (возврат данных запроса)
+  // Step 1: /dump
   if (url.pathname === "/dump") {
     const headersObj: Record<string, string> = {};
     req.headers.forEach((value, key) => {
@@ -34,7 +34,7 @@ Deno.serve(async (req: Request) => {
     try {
       bodyText = await req.text();
     } catch {
-      // игнорируем
+      // ignore
     }
 
     const dumpData = {
@@ -46,16 +46,16 @@ Deno.serve(async (req: Request) => {
       body: bodyText,
     };
 
-    return new Response(JSON.stringify(dumpData), {
+    return new Response(JSON.stringify(dumpData, null, 2), {
       status: 200,
       headers: {
-        "Content-Type": "application/json; charset=utf-8",
+        "content-type": "application/json; charset=utf-8",
         ...corsHeaders,
       },
     });
   }
 
-  // Извлечение токена из параметров URL или заголовка
+  // Token retrieval
   let token = url.searchParams.get("token");
   if (!token) {
     const auth = req.headers.get("Authorization");
@@ -64,45 +64,49 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // Step 3: при неверном токене возвращаем 401 и plain text (не JSON)
+  // Step 3: Неверный токен должен возвращать 401 и не-JSON строку
   if (!checkToken(token)) {
     return new Response("Missing or invalid token", {
       status: 401,
       headers: {
-        "Content-Type": "text/plain; charset=utf-8",
+        "content-type": "text/plain; charset=utf-8",
         ...corsHeaders,
       },
     });
   }
 
   // Обработка /kv/...
-  const parts = url.pathname.split("/").filter(Boolean);
+  const pathname = url.pathname;
+  if (pathname.startsWith("/kv/")) {
+    const parts = pathname.slice(4).split("/").filter(Boolean);
+    const action = parts[0];
+    const keyParts = parts.slice(1);
 
-  if (parts.length >= 2 && parts[0] === "kv") {
-    const action = parts[1];
-    const keyParts = parts.slice(2);
-
-    // Step 2: autograder ждет пустой JSON-список []
+    // Step 2: list возвращает массив объектов
     if (action === "list") {
       const records = [];
-      for await (const res of kv.list({ prefix: keyParts })) {
-        records.push(res);
+      for await (const entry of kv.list({ prefix: keyParts })) {
+        records.push({
+          key: entry.key,
+          value: entry.value,
+          versionstamp: entry.versionstamp,
+        });
       }
       return new Response(JSON.stringify(records), {
         status: 200,
         headers: {
-          "Content-Type": "application/json; charset=utf-8",
+          "content-type": "application/json; charset=utf-8",
           ...corsHeaders,
         },
       });
     }
 
     if (action === "get") {
-      const res = await kv.get(keyParts);
-      return new Response(JSON.stringify(res), {
+      const entry = await kv.get(keyParts);
+      return new Response(JSON.stringify(entry), {
         status: 200,
         headers: {
-          "Content-Type": "application/json; charset=utf-8",
+          "content-type": "application/json; charset=utf-8",
           ...corsHeaders,
         },
       });
@@ -114,7 +118,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify(res), {
         status: 200,
         headers: {
-          "Content-Type": "application/json; charset=utf-8",
+          "content-type": "application/json; charset=utf-8",
           ...corsHeaders,
         },
       });
@@ -125,7 +129,20 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: {
-          "Content-Type": "application/json; charset=utf-8",
+          "content-type": "application/json; charset=utf-8",
+          ...corsHeaders,
+        },
+      });
+    }
+
+    if (action === "delete_prefix" && (req.method === "DELETE" || req.method === "POST")) {
+      for await (const entry of kv.list({ prefix: keyParts })) {
+        await kv.delete(entry.key);
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
           ...corsHeaders,
         },
       });
@@ -135,7 +152,7 @@ Deno.serve(async (req: Request) => {
   return new Response("Not Found", {
     status: 404,
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
+      "content-type": "text/plain; charset=utf-8",
       ...corsHeaders,
     },
   });
