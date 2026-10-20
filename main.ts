@@ -1,158 +1,154 @@
+import { Hono } from "https://deno.land/x/hono@v3.4.1/mod.ts";
+import { HTTPException } from "https://deno.land/x/hono@v3.12.10/http-exception.ts";
+
+const app = new Hono();
 const kv = await Deno.openKv();
 
-function checkToken(token: string | null): boolean {
-  return token === "2701_8dc46d:0afefe" || token === "2701_8dc46d:oafefe";
+// Basic KV operations to support admin interface
+
+// Set a record by key (POST body is JSON)
+// https://pg4e-deno-kv-api-10.deno.dev/kv/set/books/Hamlet?key=123
+app.post("/kv/set/:key{.*}", async (c) => {
+  checkToken(c);
+  const key = c.req.param("key");
+  const body = await c.req.json();
+  const result = await kv.set(key.split('/'), body);
+  return c.json(result);
+});
+
+// Get a record by key
+// https://pg4e-deno-kv-api-10.deno.dev/kv/get/books/Hamlet?key=123
+app.get("/kv/get/:key{.*}", async (c) => {
+  checkToken(c);
+  const key = c.req.param("key");
+  const result = await kv.get(key.split('/'));
+  return c.json(result);
+});
+
+// List records with a key prefix
+// https://pg4e-deno-kv-api-10.deno.dev/kv/list/books
+app.get("/kv/list/:key{.*}", async (c) => {
+  checkToken(c);
+  const key = c.req.param("key");
+  const cursor = c.req.query("cursor");
+  const extra = {'limit': 100};
+  if ( typeof cursor == 'string' && cursor.length > 0 ) {
+    extra['cursor'] = cursor;
+  }
+  const iter = await kv.list({ prefix: key.split('/') }, extra );
+  const records = [];
+  for await (const entry of iter) {
+    records.push(entry);
+  }
+  return c.json({'records': records, 'cursor': iter.cursor});
+});
+
+// Delete a record
+// https://pg4e-deno-kv-api-10.deno.dev/kv/delete/books/Hamlet?key=123
+app.delete("/kv/delete/:key{.*}", async (c) => {
+  checkToken(c);
+  const key = c.req.param("key");
+  const result = await kv.delete(key.split('/'));
+  return c.json(result);
+});
+
+// Delete a prefix
+// https://pg4e-deno-kv-api-10.deno.dev/kv/delete/books/nonfiction?key=123
+app.delete("/kv/delete_prefix/:key{.*}", async (c) => {
+  checkToken(c);
+  const key = c.req.param("key");
+  const iter = await kv.list({ prefix: key.split('/') });
+  const keys = [];
+  for await (const entry of iter) {
+    kv.delete(entry.key);
+    keys.push(entry.key);
+  }
+  console.log("Keys with prefix", key, "deleted:", keys.length);
+  return c.json({'keys': keys});
+});
+
+// Full database reset
+// https://pg4e-deno-kv-api-10.deno.dev/kv/full_reset_42?key=123
+app.delete("/kv/full_reset_42", async (c) => {
+  checkToken(c);
+  const iter = await kv.list({ prefix: [] });
+  const keys = [];
+  for await (const entry of iter) {
+    kv.delete(entry.key);
+    keys.push(entry);
+  }
+  console.log("Database reset keys deleted:", keys.length);
+  return c.json({'keys': keys});
+});
+
+// Dump the request object for learning and debugging
+// https://pg4e-deno-kv-api-10.deno.dev/dump/stuff/goes_here?key=123
+app.all('/dump/*', async (c) => {
+  const req = c.req
+
+  // Request details
+  const method = req.method
+  const url = req.url
+  const path = req.path
+  const query = req.query()
+  const headers: Record<string, string> = {}
+  for (const [key, value] of req.raw.headers.entries()) {
+    headers[key] = value
+  }
+
+  // Try to parse body as JSON, otherwise fallback to text
+  let body: any = null
+  try {
+    body = await req.json()
+  } catch {
+    try {
+      body = await req.text()
+    } catch {
+      body = null
+    }
+  }
+
+  const dump = {
+    method,
+    url,
+    path,
+    headers,
+    query,
+    body,
+  }
+
+  return c.json(dump, 200)
+});
+
+// Make sure we return the correct HTTP Status code when we throw an exception
+app.onError((err, c) => {
+  if (err instanceof HTTPException) {
+    return c.text(err.message, err.status);
+  }
+  return c.text('Internal Server Error', 500);
+});
+
+// Insure security - The autograder will have you change this value
+function checkToken(c) {
+  const token = c.req.query("token");
+  if ( token == '42' ) return true;
+  throw new HTTPException(401, { message: 'Missing or invalid token' }); 
 }
 
-Deno.serve(async (req: Request) => {
-  const url = new URL(req.url);
-
-  const corsHeaders = {
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
-    "access-control-allow-headers": "Content-Type, Authorization",
-  };
-
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+// If you are putting up your own server you can either delete this
+// CRON entry or change it to be once per month with "0 0 1 * *" as
+// the CRON string
+Deno.cron("Hourly DB Reset", "0 * * * *", async () => {
+  const ckv = await Deno.openKv();
+  const iter = await ckv.list({ prefix: [] });
+  const keys = [];
+  let count = 0;
+  for await (const entry of iter) {
+    ckv.delete(entry.key);
+    count++;
+    if ( count < 10 ) keys.push(entry.key);
   }
-
-  // 1. Проверка /dump (Step 1)
-  if (url.pathname === "/dump") {
-    const headersObj: Record<string, string> = {};
-    req.headers.forEach((value, key) => {
-      headersObj[key] = value;
-    });
-
-    const queryObj: Record<string, string> = {};
-    url.searchParams.forEach((value, key) => {
-      queryObj[key] = value;
-    });
-
-    let bodyText = "";
-    try {
-      bodyText = await req.text();
-    } catch {
-      // ignore
-    }
-
-    const dumpData = {
-      method: req.method,
-      url: req.url,
-      path: url.pathname,
-      headers: headersObj,
-      query: queryObj,
-      body: bodyText,
-    };
-
-    return new Response(JSON.stringify(dumpData), {
-      status: 200,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        ...corsHeaders,
-      },
-    });
-  }
-
-  // 2. Токен
-  let token = url.searchParams.get("token");
-  if (!token) {
-    const auth = req.headers.get("Authorization");
-    if (auth && auth.toLowerCase().startsWith("bearer ")) {
-      token = auth.slice(7).trim();
-    }
-  }
-
-  // Step 3: при неверном токене возвращаем 401 и plain-text
-  if (!checkToken(token)) {
-    return new Response("Missing or invalid token", {
-      status: 401,
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        ...corsHeaders,
-      },
-    });
-  }
-
-  // 3. Маршруты /kv/...
-  const pathname = url.pathname;
-  if (pathname.startsWith("/kv/")) {
-    const pathParts = pathname.slice(4).split("/").filter(Boolean);
-    const action = pathParts[0];
-    const keyParts = pathParts.slice(1).map((p) => decodeURIComponent(p));
-
-    if (action === "list") {
-      const records = [];
-      for await (const res of kv.list({ prefix: keyParts })) {
-        records.push(res);
-      }
-      return new Response(JSON.stringify(records), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
-        },
-      });
-    }
-
-    if (action === "get") {
-      const res = await kv.get(keyParts);
-      return new Response(JSON.stringify(res), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
-        },
-      });
-    }
-
-    if (action === "set") {
-      let body: any = null;
-      try {
-        body = await req.json();
-      } catch {
-        body = null;
-      }
-      const res = await kv.set(keyParts, body);
-      return new Response(JSON.stringify(res), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
-        },
-      });
-    }
-
-    if (action === "delete") {
-      await kv.delete(keyParts);
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
-        },
-      });
-    }
-
-    if (action === "delete_prefix") {
-      for await (const entry of kv.list({ prefix: keyParts })) {
-        await kv.delete(entry.key);
-      }
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
-        },
-      });
-    }
-  }
-
-  return new Response(JSON.stringify({ status: "ok" }), {
-    status: 200,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      ...corsHeaders,
-    },
-  });
+  console.log("Hourly reset keys deleted:", count, keys);
 });
+
+Deno.serve(app.fetch);
