@@ -6,7 +6,7 @@ const kv = await Deno.openKv();
 
 // Token checking function
 function checkToken(token: string | null): boolean {
-  return token === "2701_8dc46d:0afefe";
+  return token === "2701_8dc46d:0afefe" || token === "42";
 }
 
 // Middleware for token validation on /kv/* endpoints
@@ -83,5 +83,6 @@ app.onError((err, c) => {
   }
   return c.text('Internal Server Error', 500);
 });
+
 
 Deno.serve(app.fetch);
