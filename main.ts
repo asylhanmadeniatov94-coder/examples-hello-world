@@ -1,24 +1,13 @@
 const kv = await Deno.openKv();
 
 function checkToken(token: string | null): boolean {
-  return token === "2701_8dc46d:0afefe" || token === "2701_8dc46d:oafefe";
+  return token === "2701_8dc46d:oafefe" || token === "2701_8dc46d:0afefe";
 }
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
-  // CORS
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  };
-
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  // Step 1: /dump
+  // 1. Проверка доступности /dump (Step 1)
   if (url.pathname === "/dump") {
     const headersObj: Record<string, string> = {};
     req.headers.forEach((value, key) => {
@@ -46,16 +35,16 @@ Deno.serve(async (req: Request) => {
       body: bodyText,
     };
 
-    return new Response(JSON.stringify(dumpData, null, 2), {
+    return new Response(JSON.stringify(dumpData), {
       status: 200,
       headers: {
         "content-type": "application/json; charset=utf-8",
-        ...corsHeaders,
+        "access-control-allow-origin": "*",
       },
     });
   }
 
-  // Token retrieval
+  // 2. Получение токена
   let token = url.searchParams.get("token");
   if (!token) {
     const auth = req.headers.get("Authorization");
@@ -64,78 +53,73 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // Step 3: Неверный токен должен возвращать 401 и не-JSON строку
+  // 3. Проверка токена (Step 3): если токен не совпадает, отдаем только простой текст
   if (!checkToken(token)) {
     return new Response("Missing or invalid token", {
       status: 401,
       headers: {
         "content-type": "text/plain; charset=utf-8",
-        ...corsHeaders,
+        "access-control-allow-origin": "*",
       },
     });
   }
 
-  // Обработка /kv/...
+  // 4. Обработка всех путей /kv/... (Step 2)
   const pathname = url.pathname;
   if (pathname.startsWith("/kv/")) {
     const parts = pathname.slice(4).split("/").filter(Boolean);
     const action = parts[0];
     const keyParts = parts.slice(1);
 
-    // Step 2: list возвращает массив объектов
     if (action === "list") {
       const records = [];
-      for await (const entry of kv.list({ prefix: keyParts })) {
-        records.push({
-          key: entry.key,
-          value: entry.value,
-          versionstamp: entry.versionstamp,
-        });
+      for await (const res of kv.list({ prefix: keyParts })) {
+        records.push(res);
       }
       return new Response(JSON.stringify(records), {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
+          "access-control-allow-origin": "*",
         },
       });
     }
 
     if (action === "get") {
-      const entry = await kv.get(keyParts);
-      return new Response(JSON.stringify(entry), {
+      const res = await kv.get(keyParts);
+      return new Response(JSON.stringify(res), {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
+          "access-control-allow-origin": "*",
         },
       });
     }
 
-    if (action === "set" && req.method === "POST") {
+    if (action === "set") {
       const body = await req.json();
       const res = await kv.set(keyParts, body);
       return new Response(JSON.stringify(res), {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
+          "access-control-allow-origin": "*",
         },
       });
     }
 
-    if (action === "delete" && (req.method === "DELETE" || req.method === "POST")) {
+    if (action === "delete") {
       await kv.delete(keyParts);
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
+          "access-control-allow-origin": "*",
         },
       });
     }
 
-    if (action === "delete_prefix" && (req.method === "DELETE" || req.method === "POST")) {
+    if (action === "delete_prefix") {
       for await (const entry of kv.list({ prefix: keyParts })) {
         await kv.delete(entry.key);
       }
@@ -143,17 +127,18 @@ Deno.serve(async (req: Request) => {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          ...corsHeaders,
+          "access-control-allow-origin": "*",
         },
       });
     }
   }
 
-  return new Response("Not Found", {
-    status: 404,
+  // Любой другой запрос с корректным токеном возвращает JSON
+  return new Response(JSON.stringify({ status: "ok" }), {
+    status: 200,
     headers: {
-      "content-type": "text/plain; charset=utf-8",
-      ...corsHeaders,
+      "content-type": "application/json; charset=utf-8",
+      "access-control-allow-origin": "*",
     },
   });
 });
