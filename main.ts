@@ -33,11 +33,22 @@ app.use('/kv/*', async (c, next) => {
 });
 
 // Step 1: /dump
-app.get('/dump', async (c) => {
-  const headersObj: Record<string, string> = {};
-  c.req.raw.headers.forEach((value, key) => {
-    headersObj[key] = value;
+app.get('/kv/list/*', async (c) => {
+  const parts = c.req.path.split('/').slice(3).filter(Boolean);
+  const iter = kv.list({ prefix: parts });
+  const records = [];
+  for await (const res of iter) {
+    records.push(res);
+  }
+  
+  return new Response(JSON.stringify(records), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    },
   });
+});
 
   const dump = {
     method: c.req.method,
