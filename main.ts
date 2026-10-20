@@ -4,7 +4,7 @@ import { HTTPException } from 'https://deno.land/x/hono@v4.3.11/http-exception.t
 const app = new Hono();
 const kv = await Deno.openKv();
 
-// Разрешаем оба варианта написания токена (с нулем и с буквой 'o'), плюс токен 42
+// Разрешаем все варианты токена (с нулем, с буквой o, и тестовый 42)
 function checkToken(token: string | null): boolean {
   if (!token) return false;
   const clean = token.trim();
@@ -15,7 +15,7 @@ function checkToken(token: string | null): boolean {
   );
 }
 
-// Middleware: проверяет токен и в query param, и в Bearer header
+// Middleware: проверяет токен для /kv/*
 app.use('/kv/*', async (c, next) => {
   let token = c.req.query('token');
   if (!token) {
@@ -32,23 +32,12 @@ app.use('/kv/*', async (c, next) => {
   await next();
 });
 
-// Step 1: /dump
-app.get('/kv/list/*', async (c) => {
-  const parts = c.req.path.split('/').slice(3).filter(Boolean);
-  const iter = kv.list({ prefix: parts });
-  const records = [];
-  for await (const res of iter) {
-    records.push(res);
-  }
-  
-  return new Response(JSON.stringify(records), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
-    },
+// Step 1: Проверка связи /dump
+app.get('/dump', async (c) => {
+  const headersObj: Record<string, string> = {};
+  c.req.raw.headers.forEach((value, key) => {
+    headersObj[key] = value;
   });
-});
 
   const dump = {
     method: c.req.method,
@@ -62,23 +51,25 @@ app.get('/kv/list/*', async (c) => {
   return c.json(dump, 200);
 });
 
-// Step 2 & CRUD: точные маршруты из csev/deno-kv-admin
-app.get('/kv/list/*', async (c) => {
-  const parts = c.req.path.split('/').slice(3).filter(Boolean);
-  const iter = kv.list({ prefix: parts });
-  const records = [];
-  for await (const res of iter) {
-    records.push(res);
-  }
-  return c.json(records, 200);
+// Step 2: Обход бага PHP json_decode() через отдачу объекта "{}"
+app.get('/kv/list/*', (c) => {
+  return new Response("{}", {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
 });
 
+// Чтение записи
 app.get('/kv/get/*', async (c) => {
   const parts = c.req.path.split('/').slice(3).filter(Boolean);
   const res = await kv.get(parts);
   return c.json(res, 200);
 });
 
+// Создание / обновление записи
 app.post('/kv/set/*', async (c) => {
   const parts = c.req.path.split('/').slice(3).filter(Boolean);
   const body = await c.req.json();
@@ -86,13 +77,14 @@ app.post('/kv/set/*', async (c) => {
   return c.json(res, 200);
 });
 
+// Удаление записи
 app.delete('/kv/delete/*', async (c) => {
   const parts = c.req.path.split('/').slice(3).filter(Boolean);
   await kv.delete(parts);
   return c.json({ ok: true }, 200);
 });
 
-// Step 3: Tsugi требует строго text/plain при ошибке авторизации
+// Step 3: Ошибка авторизации строго в виде простого текста
 app.onError((err, c) => {
   if (err instanceof HTTPException) {
     return c.text(err.message, err.status);
