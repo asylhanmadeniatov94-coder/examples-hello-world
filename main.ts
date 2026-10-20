@@ -1,13 +1,23 @@
 const kv = await Deno.openKv();
 
 function checkToken(token: string | null): boolean {
-  return token === "2701_8dc46d:oafefe" || token === "2701_8dc46d:0afefe";
+  return token === "2701_8dc46d:0afefe" || token === "2701_8dc46d:oafefe";
 }
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
-  // 1. Проверка доступности /dump (Step 1)
+  const corsHeaders = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+    "access-control-allow-headers": "Content-Type, Authorization",
+  };
+
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  // 1. Проверка /dump (Step 1)
   if (url.pathname === "/dump") {
     const headersObj: Record<string, string> = {};
     req.headers.forEach((value, key) => {
@@ -39,12 +49,12 @@ Deno.serve(async (req: Request) => {
       status: 200,
       headers: {
         "content-type": "application/json; charset=utf-8",
-        "access-control-allow-origin": "*",
+        ...corsHeaders,
       },
     });
   }
 
-  // 2. Получение токена
+  // 2. Токен
   let token = url.searchParams.get("token");
   if (!token) {
     const auth = req.headers.get("Authorization");
@@ -53,23 +63,23 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // 3. Проверка токена (Step 3): если токен не совпадает, отдаем только простой текст
+  // Step 3: при неверном токене возвращаем 401 и plain-text
   if (!checkToken(token)) {
     return new Response("Missing or invalid token", {
       status: 401,
       headers: {
         "content-type": "text/plain; charset=utf-8",
-        "access-control-allow-origin": "*",
+        ...corsHeaders,
       },
     });
   }
 
-  // 4. Обработка всех путей /kv/... (Step 2)
+  // 3. Маршруты /kv/...
   const pathname = url.pathname;
   if (pathname.startsWith("/kv/")) {
-    const parts = pathname.slice(4).split("/").filter(Boolean);
-    const action = parts[0];
-    const keyParts = parts.slice(1);
+    const pathParts = pathname.slice(4).split("/").filter(Boolean);
+    const action = pathParts[0];
+    const keyParts = pathParts.slice(1).map((p) => decodeURIComponent(p));
 
     if (action === "list") {
       const records = [];
@@ -80,7 +90,7 @@ Deno.serve(async (req: Request) => {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "access-control-allow-origin": "*",
+          ...corsHeaders,
         },
       });
     }
@@ -91,19 +101,24 @@ Deno.serve(async (req: Request) => {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "access-control-allow-origin": "*",
+          ...corsHeaders,
         },
       });
     }
 
     if (action === "set") {
-      const body = await req.json();
+      let body: any = null;
+      try {
+        body = await req.json();
+      } catch {
+        body = null;
+      }
       const res = await kv.set(keyParts, body);
       return new Response(JSON.stringify(res), {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "access-control-allow-origin": "*",
+          ...corsHeaders,
         },
       });
     }
@@ -114,7 +129,7 @@ Deno.serve(async (req: Request) => {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "access-control-allow-origin": "*",
+          ...corsHeaders,
         },
       });
     }
@@ -127,18 +142,17 @@ Deno.serve(async (req: Request) => {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "access-control-allow-origin": "*",
+          ...corsHeaders,
         },
       });
     }
   }
 
-  // Любой другой запрос с корректным токеном возвращает JSON
   return new Response(JSON.stringify({ status: "ok" }), {
     status: 200,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "access-control-allow-origin": "*",
+      ...corsHeaders,
     },
   });
 });
