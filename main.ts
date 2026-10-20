@@ -6,88 +6,77 @@ function checkToken(token: string | null): boolean {
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
-  const pathname = url.pathname;
 
-  // Автогрейдер ожидает получение токена из query-параметра или заголовка Authorization
-  const authHeader = req.headers.get("Authorization");
-  const token = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice(7)
-    : url.searchParams.get("token");
+  // Извлечение токена из параметров URL или заголовка
+  let token = url.searchParams.get("token");
+  if (!token) {
+    const auth = req.headers.get("Authorization");
+    if (auth && auth.startsWith("Bearer ")) {
+      token = auth.substring(7);
+    }
+  }
 
-  // Шаг 1: эндпоинт /dump проверяется без токена
-  if (pathname === "/dump") {
+  // Маршрут для дампа (используется для проверки доступности)
+  if (url.pathname === "/dump") {
     const entries = [];
-    for await (const entry of kv.list({ prefix: [] })) {
-      entries.push({ key: entry.key, value: entry.value });
+    for await (const res of kv.list({ prefix: [] })) {
+      entries.push(res);
     }
     return new Response(JSON.stringify(entries), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: { "content-type": "application/json; charset=utf-8" },
     });
   }
 
-  // Проверка токена: при ошибке возвращается простой текст (не JSON) с кодом 403
+  // Проверка токена
   if (!checkToken(token)) {
     return new Response("Missing or invalid token", {
       status: 403,
-      headers: { "Content-Type": "text/plain" },
+      headers: { "content-type": "text/plain; charset=utf-8" },
     });
   }
 
-  // Обработка маршрутов /kv/get, /kv/set, /kv/delete, /kv/list
-  const cleanPath = pathname.replace(/^\/kv/, "");
+  // Роутинг для /kv/...
+  const parts = url.pathname.split("/").filter(Boolean);
 
-  if (cleanPath.startsWith("/list")) {
-    const subPath = cleanPath.replace(/^\/list\/?/, "");
-    const prefix = subPath ? subPath.split("/").filter(Boolean) : [];
-    const entries = [];
-    for await (const entry of kv.list({ prefix })) {
-      entries.push(entry);
+  // parts[0] === 'kv'
+  if (parts.length >= 2 && parts[0] === "kv") {
+    const action = parts[1]; // list, get, set, delete
+    const keyPath = parts.slice(2);
+
+    if (action === "list") {
+      const entries = [];
+      for await (const res of kv.list({ prefix: keyPath })) {
+        entries.push(res);
+      }
+      return new Response(JSON.stringify(entries), {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
     }
-    return new Response(JSON.stringify(entries), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
 
-  if (cleanPath.startsWith("/get")) {
-    const subPath = cleanPath.replace(/^\/get\/?/, "");
-    const key = url.searchParams.get("key") || subPath;
-    if (!key) return new Response("Missing key", { status: 400 });
-    const keyParts = key.split("/").filter(Boolean);
-    const entry = await kv.get(keyParts);
-    return new Response(JSON.stringify(entry), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  if (cleanPath.startsWith("/set") && req.method === "POST") {
-    const body = await req.json();
-    if (!body.key || body.value === undefined) {
-      return new Response("Missing key or value", { status: 400 });
+    if (action === "get") {
+      const res = await kv.get(keyPath);
+      return new Response(JSON.stringify(res), {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
     }
-    const keyParts = Array.isArray(body.key) ? body.key : String(body.key).split("/").filter(Boolean);
-    await kv.set(keyParts, body.value);
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+
+    if (action === "set" && req.method === "POST") {
+      const body = await req.json();
+      await kv.set(keyPath, body);
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    }
+
+    if (action === "delete" && (req.method === "POST" || req.method === "DELETE")) {
+      await kv.delete(keyPath);
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    }
   }
 
-  if (cleanPath.startsWith("/delete") && req.method === "POST") {
-    const body = await req.json();
-    if (!body.key) return new Response("Missing key", { status: 400 });
-    const keyParts = Array.isArray(body.key) ? body.key : String(body.key).split("/").filter(Boolean);
-    await kv.delete(keyParts);
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  return new Response(JSON.stringify({ status: "ok" }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
+  return new Response("Deno KV Admin Server Running", {
+    headers: { "content-type": "text/plain; charset=utf-8" },
   });
 });
